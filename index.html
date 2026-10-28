@@ -87,6 +87,17 @@
     letter-spacing:.3px;
   }
   .bitem.failed{display:grid; place-items:center; color:#f0b64b; font-size:11px}
+  .bitem .saveone{
+    position:absolute; top:5px; right:5px; width:26px; height:26px; padding:0;
+    border-radius:8px; border:1px solid #33414d; display:grid; place-items:center;
+    background:rgba(6,10,14,.78); color:#cfe4f2; font-size:13px; line-height:1;
+  }
+  .bitem .saveone:active{transform:scale(.94)}
+  .bitem .editone{
+    position:absolute; top:5px; left:5px; width:26px; height:26px; padding:0;
+    border-radius:8px; border:1px solid #33414d; display:grid; place-items:center;
+    background:rgba(6,10,14,.78); color:#9fd4f0; font-size:13px; line-height:1;
+  }
   .badge{
     position:absolute; top:8px; left:8px; z-index:2;
     font-size:11px; padding:4px 8px; border-radius:999px;
@@ -292,10 +303,12 @@
       <button id="shutter" class="btn primary" disabled>拍照</button>
     </div>
     <div class="row" style="margin-top:8px">
-      <label class="btn ghost">選照片<input id="file" type="file" accept="image/*" hidden></label>
-      <label class="btn ghost">批次選圖<input id="files" type="file" accept="image/*" multiple hidden></label>
+      <button id="pickLibrary" class="btn ghost">照片庫</button>
       <button id="flip" class="btn ghost">翻轉</button>
+      <button id="pickSystemCam" class="btn ghost" title="用系統相機拍">系統相機</button>
     </div>
+    <input id="file" type="file" accept="image/*" multiple hidden>
+    <input id="fileCam" type="file" accept="image/*" capture="environment" hidden>
     <p class="hint" id="camHint"></p>
   </section>
 
@@ -463,6 +476,7 @@
     facing: "environment",
     orient: "auto",              // auto | portrait | landscape
     cropUpload: false,           // 上傳照片也裁成所選方向
+    fromBatch: false,            // 這張是從批次縮圖點進來的（重拍要回縮圖牆）
     zoom: 1,                     // 取景縮放 1–4
     zx: 0.5, zy: 0.5,            // 取景中心（0..1，相對拍照框）
     serialNo: 0,
@@ -487,9 +501,9 @@
       camBadge.textContent = "此瀏覽器不支援相機";
       camHint.className = "hint warn";
       camHint.textContent = secure
-        ? "這個瀏覽器沒有提供相機 API，用下面的「選照片」也可以。"
+        ? "這個瀏覽器沒有提供相機 API，用下面的「照片庫」也可以。"
         : "相機需要 HTTPS（或 localhost）。你現在是 HTTP，請改開 https:// 的網址，或直接用「選照片」。";
-      showFallback("相機打不開", secure ? "瀏覽器不支援，請改用「選照片」。" : "需要 HTTPS 才能開相機。用「選照片」也可以。", true);
+      showFallback("相機打不開", secure ? "瀏覽器不支援，請改用「照片庫」。" : "需要 HTTPS 才能開相機。用「照片庫」也可以。", true);
       return;
     }
     try{
@@ -519,9 +533,9 @@
       camHint.className = "hint warn";
       const name = (e && e.name) || "";
       camHint.textContent = name === "NotAllowedError"
-        ? "相機權限被拒絕。到瀏覽器設定允許這個網站使用相機，或用下面的「選照片」。"
-        : "開不了相機（" + (name || "unknown") + "）。用下面的「選照片」一樣可以。";
-      showFallback("相機打不開", "用下面的「選照片」也可以，畫質通常更好。", true);
+        ? "相機權限被拒絕。到瀏覽器設定允許這個網站使用相機，或用下面的「照片庫」。"
+        : "開不了相機（" + (name || "unknown") + "）。用下面的「照片庫」一樣可以。";
+      showFallback("相機打不開", "用下面的「照片庫」也可以，畫質通常更好。", true);
     }
   }
   function stopCam(){
@@ -1241,14 +1255,23 @@
   }
 
   // 存一個 blob：能用分享面板就走分享（手機進相簿），否則退回下載
+  // 注意：某些環境（舊 Android WebView、部分 PWA、headless）navigator.share()
+  // 會永遠不回 promise，UI 就卡在「準備中…」。所以加超時，逾時就退回下載。
   async function saveBlob(blob, name, opts){
     const allowShare = !opts || opts.share !== false;
     if(allowShare){
       try{
         const f = new File([blob], name, { type: "image/jpeg" });
         if(navigator.canShare && navigator.canShare({ files: [f] })){
-          await navigator.share({ files: [f], title: "浮水印照片" });
-          return "shared";
+          const shared = await Promise.race([
+            navigator.share({ files: [f], title: "浮水印照片" }).then(
+              function(){ return "shared"; },
+              function(e){ return (e && e.name === "AbortError") ? "cancel" : "fail"; },
+            ),
+            new Promise(function(r){ setTimeout(function(){ r("timeout"); }, 8000); }),
+          ]);
+          if(shared === "shared" || shared === "cancel") return shared;
+          // fail / timeout → 落到下面的下載路徑
         }
       }catch(err){
         if(err && err.name === "AbortError") return "cancel";
@@ -1315,7 +1338,7 @@
 
         const name = "watermark-" + stamp(when)
           + (serial ? "-" + String(serial).padStart(4, "0") : "") + ".jpg";
-        batchItems.push({ blob: blob, url: URL.createObjectURL(blob), name: name });
+        batchItems.push({ file: files[i], blob: blob, url: URL.createObjectURL(blob), name: name });
 
         const b = document.createElement("button");
         b.className = "bitem";
@@ -1323,9 +1346,18 @@
         const img = document.createElement("img");
         img.alt = "";
         img.src = makeThumb(out, 260);
+        const editB = document.createElement("span");
+        editB.className = "editone";
+        editB.textContent = "✎";
+        editB.title = "打開來微調";
+        const saveB = document.createElement("span");
+        saveB.className = "saveone";
+        saveB.setAttribute("data-save-i", String(batchItems.length - 1));
+        saveB.textContent = "⬇";
+        saveB.title = "直接存這張";
         const cap = document.createElement("b");
         cap.textContent = serial ? "NO. " + String(serial).padStart(4, "0") : (i + 1) + " / " + files.length;
-        b.appendChild(img); b.appendChild(cap);
+        b.appendChild(img); b.appendChild(editB); b.appendChild(saveB); b.appendChild(cap);
         batchGrid.appendChild(b);
         ok++;
       }catch(err){
@@ -1345,24 +1377,57 @@
       : "都沒有成功，換幾張圖試試。";
   }
 
-  $("#files").addEventListener("change", function(e){
+  /* 照片庫 / 系統相機 */
+  $("#pickLibrary").addEventListener("click", function(){
+    const el = $("#file");
+    // showPicker() 比 click() 可靠（PWA / iOS 有些情況 click 不會開）
+    if(typeof el.showPicker === "function"){ try{ el.showPicker(); return; }catch(e){} }
+    el.click();
+  });
+
+  $("#pickSystemCam").addEventListener("click", function(){
+    const el = $("#fileCam");
+    if(typeof el.showPicker === "function"){ try{ el.showPicker(); return; }catch(e){} }
+    el.click();
+  });
+
+  fileInput.addEventListener("change", function(e){
     const files = e.target.files ? Array.prototype.slice.call(e.target.files) : [];
     e.target.value = "";
-    if(files.length) runBatch(files);
+    if(!files.length) return;
+    if(files.length === 1) fromFile(files[0]);   // 一張 → 直接進編輯
+    else runBatch(files);                          // 多張 → 批次
+  });
+
+  $("#fileCam").addEventListener("change", function(e){
+    const files = e.target.files ? Array.prototype.slice.call(e.target.files) : [];
+    e.target.value = "";
+    if(files.length) fromFile(files[0]);
   });
 
   $("#batchGrid").addEventListener("click", async function(e){
-    const b = e.target.closest(".bitem[data-i]");
-    if(!b) return;
-    const it = batchItems[Number(b.getAttribute("data-i"))];
+    const item = e.target.closest(".bitem[data-i]");
+    if(!item) return;
+    const it = batchItems[Number(item.getAttribute("data-i"))];
     if(!it) return;
     const hint = $("#batchHint");
-    hint.className = "hint";
-    hint.textContent = "準備中…";
-    const how = await saveBlob(it.blob, it.name);
-    hint.className = how === "downloaded" ? "hint" : "hint ok";
-    hint.textContent = how === "shared" ? "已開分享面板〔選「儲存影像」〕。"
-      : how === "downloaded" ? "已下載 " + it.name : "";
+
+    // 右上「⬇」：直接存這一張
+    if(e.target.closest("[data-save-i]")){
+      hint.className = "hint";
+      hint.textContent = "準備中…";
+      const how = await saveBlob(it.blob, it.name);
+      hint.className = how === "downloaded" ? "hint" : "hint ok";
+      hint.textContent = how === "shared" ? "已開分享面板〔選「儲存影像」〕。"
+        : how === "downloaded" ? "已下載 " + it.name : "";
+      return;
+    }
+
+    // 點縮圖：打開到編輯器（用原檔重新壓一次，可單張微調）
+    if(!it.file) return;
+    state.fromBatch = true;
+    $("#batchView").hidden = true;
+    await fromFile(it.file);
   });
 
   $("#batchAll").addEventListener("click", async function(){
@@ -1391,8 +1456,15 @@
 
   $("#retake").addEventListener("click", function(){
     editView.hidden = true;
-    shotView.hidden = false;
     state.base = null;
+    // 從批次點進來微調的，回去看縮圖牆而不是回相機
+    if(state.fromBatch && batchItems.length){
+      state.fromBatch = false;
+      $("#batchView").hidden = false;
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+    shotView.hidden = false;
     if(!state.stream) startCam(); else video.play().catch(function(){});
     window.scrollTo({ top: 0, behavior: "smooth" });
   });
@@ -1615,8 +1687,8 @@
   }else if(!secure){
     camBadge.textContent = "需要 HTTPS";
     camHint.className = "hint warn";
-    camHint.textContent = "這個網址不是 HTTPS，瀏覽器不會給相機權限。先按「選照片」，或改用 https:// 開這個頁面。";
-    showFallback("需要 HTTPS", "瀏覽器只在 HTTPS（或 localhost）下提供相機。先用下面的「選照片」。", true);
+    camHint.textContent = "這個網址不是 HTTPS，瀏覽器不會給相機權限。先按「照片庫」，或改用 https:// 開這個頁面。";
+    showFallback("需要 HTTPS", "瀏覽器只在 HTTPS（或 localhost）下提供相機。先用下面的「照片庫」。", true);
   }else{
     startCam();
   }
