@@ -15,10 +15,21 @@ _dev/               我驗證用的工具，app 不需要（見下面）
 
 ## 怎麼開
 
+### 正式版（GitHub Pages）
+
+**https://raywu089457-cmd.github.io/watermark-camera/**
+
+- 公開、HTTPS、不需登入；手機直接開就能拍，也可「加入主畫面」
+- repo：https://github.com/raywu089457-cmd/watermark-camera
+- 部署方式：Pages 走 `master` 分支根目錄（legacy build），推上去等 ~1 分鐘自動生效
+- `_dev/` 在 `.gitignore` 內，不會被發佈
+
+### 本機 / 內網
+
 相機 API 只在 **HTTPS** 或 **localhost** 下才有（service worker 也一樣）：
 
 - **在這台電腦**：`http://127.0.0.1:8099/`
-- **手機**：`https://desktop-2nb1tlr.taila57b2b.ts.net:8450/`（Tailscale，固定 8450，不動 443）
+- **手機（同一個 tailnet）**：`https://desktop-2nb1tlr.taila57b2b.ts.net:8450/`（Tailscale，固定 8450，不動 443）
   - 開：`tailscale serve --bg --https=8450 8099`
   - 關：`tailscale serve --https=8450 off`
 - **只是想看畫面**：`index.html?demo=1`（假圖，不動相機）；`&wm=bar|corner|tile` 指定樣式
