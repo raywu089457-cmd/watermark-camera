@@ -1,0 +1,1518 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0b0d10">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="浮水印相機">
+<link rel="manifest" href="./manifest.json">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="./icons/favicon-32.png">
+<title>浮水印相機</title>
+<style>
+  :root{
+    --bg:#0b0d10; --panel:#12161b; --panel2:#171c22; --line:#242c34;
+    --fg:#e9eef4; --dim:#8b97a4; --acc:#4cc2ff; --acc-d:#1c7fb0;
+    --ok:#38d39f; --radius:14px;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  html,body{margin:0; min-height:100%}
+  html{overscroll-behavior:none}
+  body{
+    touch-action:manipulation;
+    -webkit-user-select:none; user-select:none;
+    -webkit-touch-callout:none;
+    overscroll-behavior:none;
+    background:
+      radial-gradient(1100px 520px at 50% -12%, #17222d 0%, rgba(11,13,16,0) 62%),
+      var(--bg);
+    color:var(--fg);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;
+    padding:calc(14px + env(safe-area-inset-top)) 14px calc(22px + env(safe-area-inset-bottom));
+  }
+  header{max-width:720px;margin:0 auto 14px}
+  h1{font-size:19px;margin:0 0 4px;letter-spacing:.2px}
+  h1 span{color:var(--acc)}
+  .tag{margin:0;color:var(--dim);font-size:13px}
+  main{max-width:720px;margin:0 auto}
+
+  .stage{
+    position:relative; border-radius:var(--radius); overflow:hidden;
+    background:#06080a; border:1px solid var(--line);
+    box-shadow:0 18px 40px -22px #000, inset 0 0 0 1px rgba(255,255,255,.02);
+    display:grid; place-items:center;
+  }
+  /* 拍照預覽：高度固定，寬度由拍照比例（直/橫/自動）決定，
+     所以「看到的框」就是「拍出來的框」 */
+  #shotView .stage{
+    height:var(--shot-h, clamp(168px, 30vh, 300px));
+    aspect-ratio:var(--shot-ar, 4 / 3);
+    width:auto; max-width:100%; margin:0 auto;
+  }
+  @media (min-width:600px){ #shotView .stage{max-height:none} }
+  .stage.tight{
+    aspect-ratio:auto; height:auto; max-width:none; max-height:none; background:transparent;
+    border:0; box-shadow:none; overflow:visible;
+  }
+  /* cover：預覽直接用「裁切後」的畫面，不是原圖加黑邊 */
+  .stage video{width:100%; height:100%; object-fit:cover; display:block; background:#06080a}
+  .stage canvas{
+    width:auto; height:auto; max-width:100%; max-height:42vh; margin:0 auto;
+    border-radius:10px; box-shadow:0 16px 34px -22px #000; display:block;
+  }
+  .stage.tight canvas{touch-action:none; cursor:grab}
+  .seg.compact button{font-size:12.5px; padding:7px 4px}
+
+  /* 批次 */
+  .batchbar{display:flex; align-items:center; gap:10px; margin:2px 0 10px}
+  .batchbar span{font-size:13px; color:var(--dim); flex:1 1 auto}
+  .batchbar .btn{flex:0 0 auto; padding:10px 14px; font-size:13.5px}
+  .bgrid{display:grid; grid-template-columns:repeat(3, 1fr); gap:8px}
+  .bitem{
+    position:relative; padding:0; border:1px solid var(--line); border-radius:10px;
+    overflow:hidden; background:#06080a; aspect-ratio:1; display:block;
+  }
+  .bitem img{width:100%; height:100%; object-fit:contain; display:block; background:#0a0d11}
+  .bitem b{
+    position:absolute; left:0; right:0; bottom:0; font-size:11px; font-weight:600;
+    padding:3px 6px; background:rgba(4,8,10,.72); color:#dfe9f2; text-align:center;
+    letter-spacing:.3px;
+  }
+  .bitem.failed{display:grid; place-items:center; color:#f0b64b; font-size:11px}
+  .badge{
+    position:absolute; top:8px; left:8px; z-index:2;
+    font-size:11px; padding:4px 8px; border-radius:999px;
+    background:rgba(6,8,10,.72); border:1px solid var(--line); color:var(--dim);
+    backdrop-filter:blur(6px);
+  }
+  .fallback{
+    position:absolute; inset:0; display:grid; place-items:center; text-align:center;
+    padding:18px; color:var(--dim); font-size:13px; background:#06080a;
+  }
+  .fallback b{color:var(--fg); display:block; margin-bottom:6px; font-size:14px}
+
+  .row{display:flex; gap:10px; margin-top:12px; align-items:stretch; flex-wrap:wrap}
+  .btn{
+    appearance:none; border:1px solid var(--line); background:var(--panel2);
+    color:var(--fg); font:inherit; font-weight:600; padding:13px 14px;
+    border-radius:12px; flex:1 1 auto; min-width:0; text-align:center; transition:.15s;
+    display:flex; align-items:center; justify-content:center; gap:6px;
+    white-space:nowrap;
+  }
+  @media (max-width:400px){ .btn{padding:12px 10px; font-size:14px} }
+  .btn:active{transform:scale(.985)}
+  .btn.primary{
+    background:linear-gradient(180deg, #57c8ff, #1f8fc4); border-color:#2ea4d9;
+    color:#04141c; box-shadow:0 10px 26px -14px #23a8e0;
+  }
+  .btn.primary:disabled{opacity:.42; box-shadow:none}
+  .btn.ghost{background:rgba(255,255,255,.03)}
+  .btn.small{flex:0 0 auto; padding:10px 12px; font-size:13px; font-weight:500}
+  #shutter{flex:1 1 100%}
+
+  .hint{margin:10px 2px 0; font-size:12px; color:var(--dim); min-height:1.2em}
+  .hint.warn{color:#f0b64b}
+  .hint.ok{color:var(--ok)}
+
+  .panel{
+    margin-top:14px; padding:14px; border-radius:var(--radius);
+    background:linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,.012));
+    border:1px solid var(--line);
+  }
+  .field{margin-bottom:14px}
+  .field:last-child{margin-bottom:0}
+  .field > span{display:block; font-size:12px; color:var(--dim); margin-bottom:7px; letter-spacing:.3px}
+  .field.two{display:grid; grid-template-columns:1fr 1fr; gap:14px}
+  .field.two label > span{display:block; font-size:12px; color:var(--dim); margin-bottom:6px}
+
+  input[type=text]{
+    width:100%; padding:12px 13px; border-radius:11px; border:1px solid var(--line);
+    background:#0a0d11; color:var(--fg); font:inherit; outline:none;
+  }
+  input[type=text]:focus{border-color:var(--acc-d); box-shadow:0 0 0 3px rgba(76,194,255,.12)}
+  input[type=range]{
+    width:100%; appearance:none; height:4px; border-radius:999px;
+    background:#2a333c; outline:none; margin:10px 0 0;
+  }
+  input[type=range]::-webkit-slider-thumb{
+    appearance:none; width:22px; height:22px; border-radius:50%;
+    background:#e9eef4; border:4px solid #0b0d10; box-shadow:0 0 0 1px var(--line);
+  }
+  input[type=range]::-moz-range-thumb{
+    width:16px;height:16px;border-radius:50%;background:#e9eef4;border:4px solid #0b0d10;
+  }
+
+  input[type=text], input[type=number]{
+    -webkit-user-select:text; user-select:text;
+  }
+  input[type=range]{touch-action:none}
+
+  /* 案名 / 地點 / 事項 */
+  .stack{display:flex; flex-direction:column; gap:8px}
+  .frow{display:flex; align-items:center; gap:8px}
+  .frow em{flex:0 0 38px; font-style:normal; font-size:12.5px; color:var(--dim); text-align:right}
+  .frow input[type=text]{flex:1 1 auto; width:auto; min-width:0; padding:11px 12px}
+  .savebtn{
+    flex:0 0 auto; border:1px solid var(--line); background:#0a0d11; color:#9fb0c0;
+    font:inherit; font-size:12px; padding:10px 9px; border-radius:10px;
+  }
+  .savebtn:active{transform:scale(.97)}
+  .fieldchips{display:flex; flex-wrap:wrap; gap:6px; padding-left:46px}
+  .fieldchips .fchip{
+    padding:5px 9px; font-size:12px; border-radius:999px;
+    border:1px solid var(--line); background:#0a0d11; color:#b8c4d0; font:inherit; font-size:12px;
+  }
+  .fieldchips .fchip i{opacity:.45; margin-left:5px; font-style:normal}
+  .fieldchips .fchip i:hover{opacity:1; color:#ff8a8a}
+  .unitrow{display:flex; align-items:center; gap:8px; padding-left:46px}
+  .sw{display:flex; align-items:center; gap:7px; font-size:12.5px; color:#c3ccd6; flex:0 0 auto}
+  .sw input[type=checkbox]{
+    appearance:none; width:19px; height:19px; border-radius:6px;
+    border:1px solid #333d47; background:#0a0d11; position:relative; flex:0 0 auto;
+  }
+  .sw input[type=checkbox]:checked{background:var(--acc-d); border-color:var(--acc)}
+  .sw input[type=checkbox]:checked::after{
+    content:""; position:absolute; left:5px; top:1px; width:5px; height:10px;
+    border:2px solid #eaf7ff; border-top:0; border-left:0; transform:rotate(40deg);
+  }
+  .sw input[type=checkbox]:disabled{border-color:#2a333c; background:#0d1116}
+  .unitrow select{
+    appearance:none; flex:1 1 0; min-width:0;
+    background:#0a0d11; color:var(--fg); font:inherit; font-size:13px;
+    border:1px solid var(--line); border-radius:10px; padding:10px;
+  }
+  .unitrow select:disabled{opacity:.4}
+
+  .seg{display:flex; gap:6px; background:#0a0d11; border:1px solid var(--line); padding:4px; border-radius:12px}
+  .seg button{
+    flex:1; appearance:none; border:0; background:transparent; color:var(--dim);
+    font:inherit; font-size:13px; font-weight:600; padding:9px 6px; border-radius:9px; transition:.15s;
+  }
+  .seg button.on{background:#222b34; color:var(--fg); box-shadow:inset 0 0 0 1px #313c47}
+
+  .grid9{display:grid; grid-template-columns:repeat(3,1fr); gap:6px; max-width:190px}
+  .grid9 button{
+    aspect-ratio:1; border-radius:9px; border:1px solid var(--line);
+    background:#0a0d11; color:#54616e; font-size:14px; display:grid; place-items:center;
+  }
+  .grid9 button.on{border-color:var(--acc-d); color:var(--acc); background:rgba(76,194,255,.09)}
+
+  .checks{display:flex; flex-wrap:wrap; gap:8px 16px; font-size:13px}
+  .checks label{display:flex; align-items:center; gap:7px; color:#c3ccd6}
+  .checks input[type=checkbox]{
+    appearance:none; width:19px; height:19px; border-radius:6px;
+    border:1px solid #333d47; background:#0a0d11; position:relative; flex:0 0 auto;
+  }
+  .checks input[type=checkbox]:checked{background:var(--acc-d); border-color:var(--acc)}
+  .checks input[type=checkbox]:checked::after{
+    content:""; position:absolute; left:5px; top:1px; width:5px; height:10px;
+    border:2px solid #eaf7ff; border-top:0; border-left:0; transform:rotate(40deg);
+  }
+  .gnote{font-size:12px; color:var(--dim)}
+  .gnote.ok{color:var(--ok)}
+  .gnote.warn{color:#f0b64b}
+
+  /* 模板 chips */
+  .chips{display:flex; flex-wrap:wrap; gap:6px}
+  .chips:empty::after{content:"還沒有模板 —— 調好樣式後按下面「存為模板」"; color:#5d6975; font-size:12px}
+  .chip{
+    display:inline-flex; align-items:center; gap:6px; max-width:100%;
+    padding:8px 11px; border-radius:999px; cursor:pointer;
+    border:1px solid var(--line); background:#0a0d11; color:#c3ccd6;
+    font:inherit; font-size:13px;
+  }
+  .chip.on{border-color:var(--acc-d); background:rgba(76,194,255,.10); color:var(--acc)}
+  .chip i{font-style:normal; opacity:.55; padding:0 2px; font-size:15px; line-height:1}
+  .chip i:hover{opacity:1; color:#ff8a8a}
+  .minirow{display:flex; gap:8px; margin-top:9px; flex-wrap:wrap}
+  .minirow .btn{flex:0 0 auto; font-size:13px; font-weight:500; padding:9px 12px}
+  .savename{display:flex; gap:8px; margin-top:9px}
+  .savename input{flex:1 1 auto; min-width:0}
+  .savename .btn{flex:0 0 auto; padding:11px 13px}
+  footer{margin:18px auto 0; max-width:720px; font-size:11.5px; color:#5d6975; text-align:center}
+
+  /* PWA：安裝提示 / 更新提示 */
+  .installbar{margin-top:12px}
+  .installbar .btn{width:100%; font-size:13px; font-weight:500; padding:11px 12px}
+  .ioshint{margin:10px 2px 0; font-size:12px; color:var(--dim); line-height:1.6}
+  .ioshint b{color:#c3ccd6; font-weight:600}
+  .toast{
+    position:fixed; z-index:50; left:12px; right:12px;
+    bottom:calc(12px + env(safe-area-inset-bottom));
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    padding:10px 12px; border-radius:12px; font-size:13px;
+    background:#1a2530; border:1px solid #2d3b48;
+    box-shadow:0 16px 34px -18px #000;
+  }
+  .toast .btn{flex:0 0 auto; padding:8px 12px; font-size:13px; font-weight:600}
+  [hidden]{display:none !important}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>浮水印<span>相機</span></h1>
+  <p class="tag">拍一張，浮水印壓進圖裡。照片只在你的裝置上處理，不上傳。</p>
+</header>
+
+<main>
+  <!-- ================= 拍攝 ================= -->
+  <section id="shotView">
+    <div class="stage">
+      <span class="badge" id="camBadge">相機未啟動</span>
+      <video id="video" playsinline muted autoplay></video>
+      <div class="fallback" id="camFallback" hidden></div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <div class="seg compact" id="orientSeg" style="flex:1 1 auto">
+        <button data-orient="auto" class="on">自動</button>
+        <button data-orient="portrait">直式</button>
+        <button data-orient="landscape">橫式</button>
+      </div>
+    </div>
+    <label class="sw" id="cropWrap" style="margin:10px 2px 0">
+      <input type="checkbox" id="cCropUpload">
+      <span>選照片時也裁成這個方向</span>
+    </label>    
+    <div class="row">
+      <button id="shutter" class="btn primary" disabled>拍照</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label class="btn ghost">選照片<input id="file" type="file" accept="image/*" hidden></label>
+      <label class="btn ghost">批次選圖<input id="files" type="file" accept="image/*" multiple hidden></label>
+      <button id="flip" class="btn ghost">翻轉</button>
+    </div>
+    <p class="hint" id="camHint"></p>
+  </section>
+
+  <!-- ================= 批次 ================= -->
+  <section id="batchView" hidden>
+    <div class="batchbar">
+      <span id="batchStatus">準備中…</span>
+      <button id="batchAll" class="btn primary" disabled>全部下載</button>
+    </div>
+    <div class="bgrid" id="batchGrid"></div>
+    <div class="row">
+      <button id="batchBack" class="btn ghost">返回</button>
+    </div>
+    <p class="hint" id="batchHint"></p>
+  </section>
+
+  <!-- ================= 編輯 ================= -->
+  <section id="editView" hidden>
+    <div class="stage tight">
+      <canvas id="canvas"></canvas>
+    </div>
+
+    <div class="panel">
+      <div class="field">
+        <span>模板（存起來，下次一個鍵就套回去）</span>
+        <div class="chips" id="presets"></div>
+        <div class="minirow">
+          <button id="savePreset" class="btn ghost">＋ 存為模板</button>
+          <button id="resetCfg" class="btn ghost">回到預設樣式</button>
+          <button id="resetSerial" class="btn ghost">序號歸零</button>
+        </div>
+        <div class="savename" id="saveNameWrap" hidden>
+          <input id="presetName" type="text" maxlength="16" placeholder="模板名稱，例如：A 棟灌漿">
+          <button id="presetOk" class="btn primary">存</button>
+          <button id="presetCancel" class="btn ghost">取消</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <span>浮水印欄位（留空的不會出現；右邊「存」可把常用值收起來）</span>
+        <div class="stack">
+          <div class="frow">
+            <em>案名</em>
+            <input id="caseName" type="text" maxlength="40" placeholder="XX 工地">
+            <button class="savebtn" data-save="caseName" title="存成常用">存</button>
+          </div>
+          <div class="fieldchips" id="chips-caseName" hidden></div>
+
+          <div class="frow">
+            <em>地點</em>
+            <input id="place" type="text" maxlength="40" placeholder="東側 / 大門（選填）">
+            <button class="savebtn" data-save="place" title="存成常用">存</button>
+          </div>
+          <div class="fieldchips" id="chips-place" hidden></div>
+
+          <div class="unitrow">
+            <label class="sw"><input type="checkbox" id="cUnit"><span>戶別</span></label>
+            <select id="unitFloor" disabled aria-label="樓層"></select>
+            <select id="unitBlock" disabled aria-label="戶別"></select>
+          </div>
+
+          <div class="frow">
+            <em>事項</em>
+            <input id="item" type="text" maxlength="40" placeholder="灌漿完成 / 王小明">
+            <button class="savebtn" data-save="item" title="存成常用">存</button>
+          </div>
+          <div class="fieldchips" id="chips-item" hidden></div>
+        </div>
+      </div>
+
+      <div class="field">
+        <span>樣式</span>
+        <div class="seg" id="modeSeg">
+          <button data-mode="bar" class="on">資訊條</button>
+          <button data-mode="corner">角落</button>
+          <button data-mode="tile">滿版平鋪</button>
+        </div>
+      </div>
+
+      <div class="field" id="gridWrap">
+        <span>位置（也可以直接在畫面上拖浮水印）</span>
+        <div class="grid9" id="grid9">
+          <button data-pos="0">↖</button><button data-pos="1">↑</button><button data-pos="2">↗</button>
+          <button data-pos="3">←</button><button data-pos="4">·</button><button data-pos="5">→</button>
+          <button data-pos="6">↙</button><button data-pos="7">↓</button><button data-pos="8">↘</button>
+        </div>
+      </div>
+
+      <div class="field two">
+        <label><span>字級</span><input id="scale" type="range" min="0.5" max="2.4" step="0.05" value="1"></label>
+        <label><span>不透明度</span><input id="opacity" type="range" min="0.15" max="1" step="0.05" value="0.92"></label>
+      </div>
+
+      <div class="field checks">
+        <label><input id="cDate" type="checkbox" checked>日期</label>
+        <label><input id="cTime" type="checkbox" checked>時間</label>
+        <label><input id="cGps" type="checkbox" checked>GPS</label>
+        <label><input id="cSerial" type="checkbox">流水號</label>
+        <label id="barTopWrap" hidden><input id="cBarTop" type="checkbox">資訊條放上方</label>
+        <span id="gpsNote" class="gnote"></span>
+      </div>
+    </div>
+
+    <div class="row">
+      <button id="save" class="btn primary">儲存 / 分享</button>
+      <button id="retake" class="btn ghost">重拍</button>
+    </div>
+    <p class="hint" id="saveHint"></p>
+  </section>
+</main>
+
+<footer>
+  <span id="footNote">案名／地點／事項可存成模板 · 不上傳照片 · 加在主畫面就能離線用</span>
+</footer>
+
+<div class="installbar" id="installBar" hidden>
+  <button id="installBtn" class="btn ghost">安裝到主畫面</button>
+</div>
+<p class="ioshint" id="iosHint" hidden>
+  <b>iPhone / iPad</b>：按底部分享鈕 → <b>加入主畫面</b>，之後就是全螢幕的 App。
+</p>
+
+<div class="toast" id="updateToast" hidden>
+  <span>有新版本</span>
+  <button id="updateReload" class="btn primary">重新載入</button>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  const $ = s => document.querySelector(s);
+
+  const video = $("#video"), canvas = $("#canvas");
+  const shotView = $("#shotView"), editView = $("#editView");
+  const shutter = $("#shutter"), flip = $("#flip"), fileInput = $("#file");
+  const camHint = $("#camHint"), camBadge = $("#camBadge"), camFallback = $("#camFallback");
+  const saveHint = $("#saveHint");
+
+  const STORE = { cfg: "wm.cfg.v1", presets: "wm.presets.v1", serial: "wm.serial.v1", fields: "wm.fields.v1" };
+  const DEFAULT_CFG = {
+    caseName: "", place: "", item: "",
+    unitOn: false, unitBlock: "A", unitFloor: 5,
+    mode: "bar", scale: 1, opacity: 0.92,
+    showDate: true, showTime: true, showGps: true, showSerial: false,
+    barTop: false,
+    px: 0.04, py: 0.80,   // 角落模式的左上角（0..1）
+    pos: 6
+  };
+  function lsGet(k, fb){
+    try{ const v = localStorage.getItem(k); return v === null ? fb : JSON.parse(v); }
+    catch(e){ return fb; }
+  }
+  function lsSet(k, v){
+    try{ localStorage.setItem(k, JSON.stringify(v)); return true; }
+    catch(e){ return false; }
+  }
+
+  const state = {
+    base: null,          // 原圖（已轉正、已縮到上限）
+    W: 0, H: 0,
+    time: new Date(),
+    gps: null,
+    gpsNote: "",
+    stream: null,
+    facing: "environment",
+    orient: "auto",              // auto | portrait | landscape
+    cropUpload: false,           // 上傳照片也裁成所選方向
+    serialNo: 0,
+    serialAllocated: false,   // 這張照片已經配過號了嗎（避免拖浮水印時重複配/重複跳號）
+    presetIdx: -1,
+    cfg: (function(){
+      const saved = Object.assign({}, DEFAULT_CFG, lsGet(STORE.cfg, {}) || {});
+      // 舊版是單一「自訂文字」欄位：搬進去「事項」，不要讓舊設定白白不見
+      if(saved.text && !saved.item){ saved.item = saved.text; }
+      delete saved.text;
+      return saved;
+    })()
+  };
+
+  /* ---------------- 相機 ---------------- */
+  const secure = window.isSecureContext ||
+    location.hostname === "localhost" || location.hostname === "127.0.0.1";
+
+  async function startCam(){
+    stopCam();
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      camBadge.textContent = "此瀏覽器不支援相機";
+      camHint.className = "hint warn";
+      camHint.textContent = secure
+        ? "這個瀏覽器沒有提供相機 API，用下面的「選照片」也可以。"
+        : "相機需要 HTTPS（或 localhost）。你現在是 HTTP，請改開 https:// 的網址，或直接用「選照片」。";
+      showFallback("相機打不開", secure ? "瀏覽器不支援，請改用「選照片」。" : "需要 HTTPS 才能開相機。用「選照片」也可以。", true);
+      return;
+    }
+    try{
+      camBadge.textContent = "啟動中…";
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: state.facing }, width: { ideal: 3840 }, height: { ideal: 2160 } },
+        audio: false
+      });
+      state.stream = stream;
+      video.srcObject = stream;
+      await video.play().catch(function(){});
+      shutter.disabled = false;
+      camFallback.hidden = true;
+      camBadge.textContent = "相機就緒";
+      updateStageAspect();
+      video.addEventListener("loadedmetadata", updateStageAspect, { once: true });
+      camHint.className = "hint";
+      camHint.textContent = "畫面比例以「拍照」後的結果為準。";
+      const t = stream.getVideoTracks()[0];
+      if(t && t.getSettings){
+        const s = t.getSettings();
+        if(s.width) camBadge.textContent = "相機 " + s.width + "×" + s.height;
+      }
+    }catch(e){
+      shutter.disabled = true;
+      camBadge.textContent = "無法開啟相機";
+      camHint.className = "hint warn";
+      const name = (e && e.name) || "";
+      camHint.textContent = name === "NotAllowedError"
+        ? "相機權限被拒絕。到瀏覽器設定允許這個網站使用相機，或用下面的「選照片」。"
+        : "開不了相機（" + (name || "unknown") + "）。用下面的「選照片」一樣可以。";
+      showFallback("相機打不開", "用下面的「選照片」也可以，畫質通常更好。", true);
+    }
+  }
+  function stopCam(){
+    if(state.stream){ state.stream.getTracks().forEach(function(t){ try{ t.stop(); }catch(e){} }); }
+    state.stream = null;
+  }
+  function showFallback(title, body, on){
+    camFallback.hidden = !on;
+    if(on) camFallback.innerHTML = "<div><b>" + title + "</b>" + body + "</div>";
+  }
+
+  /* ---------------- 取像 ---------------- */
+  /* ---------------- 直式 / 橫式 / 自動 ---------------- */
+  const ORIENT_STORE = "wm.orient.v1";
+  const CROP_STORE = "wm.cropupload.v1";
+  const ORIENT_RATIO = { portrait: { w: 3, h: 4 }, landscape: { w: 4, h: 3 } };
+
+  function setOrient(mode, persist){
+    if(mode !== "portrait" && mode !== "landscape") mode = "auto";
+    state.orient = mode;
+    if(persist) lsSet(ORIENT_STORE, mode);
+    Array.prototype.forEach.call($("#orientSeg").querySelectorAll("button"), function(b){
+      b.classList.toggle("on", b.dataset.orient === mode);
+    });
+    updateStageAspect();
+  }
+
+  // 預覽框的比例：自動 → 跟鏡頭實際比例；直/橫 → 固定 3:4 / 4:3
+  // 直式（含自動但鏡頭是直式時）給比較多高度，不然寬度只剩不到 200px
+  function updateStageAspect(){
+    const stage = shotView.querySelector(".stage");
+    const r = ORIENT_RATIO[state.orient];
+    let w, h;
+    if(r){ w = r.w; h = r.h; }
+    else{
+      const vw = video.videoWidth, vh = video.videoHeight;
+      if(vw && vh){ w = vw; h = vh; } else { w = 4; h = 3; }
+    }
+    stage.style.setProperty("--shot-ar", w + " / " + h);
+    stage.style.setProperty("--shot-h", (w / h) < 1
+      ? "clamp(210px, 40vh, 400px)"     // 直式
+      : "clamp(168px, 30vh, 300px)");   // 橫式 / 自動橫式
+    syncCropToggle();
+  }
+
+  // 「選照片時也裁」只在意義上有效（自動模式沒比例可裁）→ 灰掉
+  function syncCropToggle(){
+    const box = $("#cCropUpload");
+    const wrap = $("#cropWrap");
+    if(!box) return;
+    const meaningful = state.orient !== "auto";
+    box.disabled = !meaningful;
+    if(wrap) wrap.style.opacity = meaningful ? "1" : ".45";
+  }
+
+  // 從 video 影格取像；選了直/橫就置中裁切到那個比例（跟預覽一致）
+  function capture(){
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if(!vw || !vh){ camHint.textContent = "相機還沒準備好，等一下再按。"; return; }
+
+    const r = ORIENT_RATIO[state.orient];
+    let sx = 0, sy = 0, sw = vw, sh = vh;
+    if(r){
+      const want = r.w / r.h, have = vw / vh;
+      if(have > want){ sw = Math.round(vh * want); sh = vh; }        // 影格比較寬 → 裁左右
+      else{ sw = vw; sh = Math.round(vw / want); }                   // 影格比較高 → 裁上下
+      sx = Math.round((vw - sw) / 2);
+      sy = Math.round((vh - sh) / 2);
+    }
+
+    const c = document.createElement("canvas");
+    c.width = sw; c.height = sh;
+    c.getContext("2d").drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+    useImage(c);
+  }
+
+  async function loadImageSource(file){
+    let src = null, w = 0, h = 0;
+    if(window.createImageBitmap){
+      try{
+        const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
+        src = bmp; w = bmp.width; h = bmp.height;
+      }catch(e){ /* fall through */ }
+    }
+    if(!src){
+      const url = URL.createObjectURL(file);
+      try{
+        const img = await new Promise(function(res, rej){
+          const i = new Image();
+          i.onload = function(){ res(i); };
+          i.onerror = rej;
+          i.src = url;
+        });
+        src = img; w = img.naturalWidth; h = img.naturalHeight;
+      }finally{ setTimeout(function(){ URL.revokeObjectURL(url); }, 8000); }
+    }
+    return { src: src, w: w, h: h };
+  }
+
+  // 把來源畫成「工作用 base canvas」：可選裁成直/橫、長邊上限 4096
+  function baseCanvasFrom(src, w, h){
+    const MAX = 4096;
+    const r = cropRatioForUpload();
+    let sx = 0, sy = 0, sw = w, sh = h;
+    if(r){
+      const want = r.w / r.h, have = w / h;
+      if(have > want){ sw = Math.round(h * want); sh = h; }   // 原本比較寬 → 裁左右
+      else{ sw = w; sh = Math.round(w / want); }                // 原本比較高 → 裁上下
+      sx = Math.round((w - sw) / 2);
+      sy = Math.round((h - sh) / 2);
+    }
+    const k = Math.min(1, MAX / Math.max(sw, sh));
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(sw * k));
+    c.height = Math.max(1, Math.round(sh * k));
+    c.getContext("2d").drawImage(src, sx, sy, sw, sh, 0, 0, c.width, c.height);
+    return c;
+  }
+
+  async function fromFile(file){
+    if(!file) return;
+    const s = await loadImageSource(file);
+    useImage(baseCanvasFrom(s.src, s.w, s.h));
+  }
+
+  // 只有在「有選直/橫」+「勾了裁切」時才回比例；自動模式不裁
+  function cropRatioForUpload(){
+    if(!state.cropUpload) return null;
+    return ORIENT_RATIO[state.orient] || null;
+  }
+
+  // 用同一組設定把一張 base canvas 壓成成品（單張與批次共用）
+  function composeOne(base, when, gps, serialNo){
+    const out = document.createElement("canvas");
+    out.width = base.width; out.height = base.height;
+    const ctx = out.getContext("2d");
+    ctx.drawImage(base, 0, 0);
+
+    const prev = {
+      W: state.W, H: state.H, time: state.time, gps: state.gps,
+      serialNo: state.serialNo, allocated: state.serialAllocated,
+    };
+    state.W = base.width; state.H = base.height;
+    state.time = when; state.gps = gps;
+    state.serialNo = serialNo; state.serialAllocated = true;
+    try{ drawMark(ctx); }
+    finally{
+      state.W = prev.W; state.H = prev.H; state.time = prev.time; state.gps = prev.gps;
+      state.serialNo = prev.serialNo; state.serialAllocated = prev.allocated;
+    }
+    return out;
+  }
+
+  function makeThumb(src, size){
+    const c = document.createElement("canvas");
+    const k = size / Math.max(src.width, src.height);
+    c.width = Math.max(1, Math.round(src.width * k));
+    c.height = Math.max(1, Math.round(src.height * k));
+    c.getContext("2d").drawImage(src, 0, 0, c.width, c.height);
+    return c.toDataURL("image/jpeg", 0.8);
+  }
+
+  function allocSerial(){
+    const n = Number(lsGet(STORE.serial, 0) || 0) + 1;
+    lsSet(STORE.serial, n);
+    return n;
+  }
+
+  function fileTime(file){
+    const t = file && file.lastModified;
+    if(!t) return new Date();
+    const d = new Date(t);
+    return isNaN(d.getTime()) ? new Date() : d;
+  }
+
+  function useImage(c){
+    state.base = c;
+    state.W = c.width; state.H = c.height;
+    state.time = new Date();
+    state.gps = null; state.gpsNote = "";
+    // 流水號：這張照片重新配號（真的用到時才配，見 ensureSerial）
+    state.serialNo = 0;
+    state.serialAllocated = false;
+    shotView.hidden = true;
+    editView.hidden = false;
+    saveHint.textContent = "";
+    render();
+    askGps();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function askGps(){
+    if(!navigator.geolocation){ state.gpsNote = "這個瀏覽器沒有定位"; render(); return; }
+    state.gpsNote = "定位中…"; render();
+    navigator.geolocation.getCurrentPosition(
+      function(p){
+        state.gps = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy };
+        state.gpsNote = ""; render();
+      },
+      function(err){
+        state.gpsNote = (err && err.code === 1) ? "定位被拒絕" : "抓不到定位";
+        render();
+      },
+      { enableHighAccuracy: true, timeout: 9000, maximumAge: 30000 }
+    );
+  }
+
+  /* ---------------- 浮水印 ---------------- */
+  const FONT = '700 %px "Noto Sans TC","PingFang TC","Microsoft JhengHei",-apple-system,"Segoe UI",sans-serif';
+
+  function pad2(n){ return String(n).padStart(2, "0"); }
+  function lines(){
+    const L = [], c = state.cfg, t = state.time;
+    if(c.caseName && c.caseName.trim()) L.push(c.caseName.trim());
+    // 地點行 = 戶別（可選）＋ 自由地點文字
+    const loc = [];
+    if(c.unitOn) loc.push(String(c.unitFloor) + "樓 " + c.unitBlock + " 戶");
+    if(c.place && c.place.trim()) loc.push(c.place.trim());
+    if(loc.length) L.push(loc.join("　"));
+    if(c.item && c.item.trim()) L.push(c.item.trim());
+    const dt = [];
+    if(c.showDate) dt.push(t.getFullYear() + "/" + pad2(t.getMonth() + 1) + "/" + pad2(t.getDate()));
+    if(c.showTime) dt.push(pad2(t.getHours()) + ":" + pad2(t.getMinutes()) + ":" + pad2(t.getSeconds()));
+    if(dt.length) L.push(dt.join("  "));
+    if(c.showGps && state.gps){
+      L.push("GPS " + state.gps.lat.toFixed(5) + ", " + state.gps.lon.toFixed(5)
+        + (state.gps.acc ? "  ±" + Math.round(state.gps.acc) + "m" : ""));
+    }
+    if(c.showSerial){
+      ensureSerial();
+      L.push("NO. " + String(state.serialNo).padStart(4, "0"));
+    }
+    return L;
+  }
+
+  // 流水號：一張照片只配一次，要用的當下才配（_0001 開始，不會出現 0000）
+  function ensureSerial(){
+    if(state.serialAllocated) return;
+    const n = Number(lsGet(STORE.serial, 0) || 0) + 1;
+    lsSet(STORE.serial, n);
+    state.serialNo = n;
+    state.serialAllocated = true;
+  }
+
+  // 定位狀態只顯示在畫面上，不燒進照片裡
+  function syncGpsNote(){
+    const el = $("#gpsNote");
+    if(!el) return;
+    if(!state.cfg.showGps){ el.textContent = ""; el.className = "gnote"; return; }
+    if(state.gps){ el.textContent = "已取得定位 ±" + Math.round(state.gps.acc || 0) + "m"; el.className = "gnote ok"; }
+    else{ el.textContent = (state.gpsNote || "定位中…") + "（這張不會有 GPS）"; el.className = "gnote warn"; }
+  }
+
+  function fontPx(){ return Math.max(10, Math.round(state.W * 0.030 * state.cfg.scale)); }
+  function lineH(fs){ return Math.round(fs * 1.38); }
+
+  function measure(ctx, L, fs){
+    let w = 0;
+    ctx.font = FONT.replace("%px", fs + "px");
+    for(let i = 0; i < L.length; i++) w = Math.max(w, ctx.measureText(L[i]).width);
+    return { w: w, h: lineH(fs) * L.length };
+  }
+
+  function textWithShadow(ctx, txt, x, y){
+    ctx.shadowColor = "rgba(0,0,0,.55)";
+    ctx.shadowBlur = Math.max(2, Math.round(state.W * 0.004));
+    ctx.shadowOffsetY = Math.max(1, Math.round(state.W * 0.0012));
+    ctx.fillText(txt, x, y);
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+  }
+
+  function drawMark(ctx){
+    const L = lines();
+    if(!L.length) return;
+    const c = state.cfg, W = state.W, H = state.H;
+    const op = c.opacity;
+    const fs = fontPx(), lh = lineH(fs);
+
+    ctx.save();
+    ctx.textBaseline = "top";
+    ctx.textAlign = "left";
+
+    if(c.mode === "bar"){
+      const padX = Math.round(W * 0.034), padY = Math.round(W * 0.020);
+      const barH = lh * L.length + padY * 2;
+      const y0 = c.barTop ? 0 : H - barH;
+      const g = ctx.createLinearGradient(0, y0, 0, y0 + barH);
+      g.addColorStop(0, "rgba(0,0,0," + (0.58 * op) + ")");
+      g.addColorStop(1, "rgba(0,0,0," + (0.74 * op) + ")");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, y0, W, barH);
+      // accent hairline
+      ctx.fillStyle = "rgba(76,194,255," + (0.85 * op) + ")";
+      ctx.fillRect(0, c.barTop ? y0 + barH - Math.max(2, W * 0.0016) : y0, W, Math.max(2, W * 0.0016));
+      ctx.font = FONT.replace("%px", fs + "px");
+      ctx.fillStyle = "rgba(255,255,255," + op + ")";
+      for(let i = 0; i < L.length; i++){
+        textWithShadow(ctx, L[i], padX, y0 + padY + i * lh);
+      }
+    }
+    else if(c.mode === "corner"){
+      const m = measure(ctx, L, fs);
+      const pad = Math.round(W * 0.026);
+      const bx = Math.min(Math.max(c.px * W, pad), Math.max(pad, W - m.w - pad));
+      const by = Math.min(Math.max(c.py * H, pad), Math.max(pad, H - m.h - pad));
+      // 半透明底片，讓字在任何背景都讀得懂
+      ctx.fillStyle = "rgba(0,0,0," + (0.30 * op) + ")";
+      const bx0 = bx - pad * 0.55, by0 = by - pad * 0.4;
+      roundRect(ctx, bx0, by0, m.w + pad * 1.1, m.h + pad * 0.85, Math.max(4, W * 0.006));
+      ctx.fill();
+      ctx.font = FONT.replace("%px", fs + "px");
+      ctx.fillStyle = "rgba(255,255,255," + op + ")";
+      for(let i = 0; i < L.length; i++) textWithShadow(ctx, L[i], bx, by + i * lh);
+    }
+    else { // tile
+      const tfs = Math.max(12, Math.round(W * 0.052 * c.scale));
+      const txt = ((c.caseName || "").trim() || (c.item || "").trim() || "SAMPLE");
+      const stepY = tfs * 3.0, stepX = tfs * (txt.length * 0.62 + 5.2);
+      ctx.translate(W / 2, H / 2);
+      ctx.rotate(-Math.PI / 7);
+      ctx.font = FONT.replace("%px", tfs + "px");
+      ctx.fillStyle = "rgba(255,255,255," + (0.13 * op) + ")";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const spanY = Math.ceil((H) / stepY) + 2, spanX = Math.ceil((W) / stepX) + 2;
+      for(let r = -spanY; r <= spanY; r++){
+        const offset = (r % 2) ? stepX / 2 : 0;
+        for(let q = -spanX; q <= spanX; q++){
+          ctx.fillText(txt, q * stepX + offset, r * stepY);
+        }
+      }
+    }
+    ctx.restore();
+  }
+
+  function roundRect(ctx, x, y, w, h, r){
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function render(){
+    schedulePersist();
+    if(!state.base) return;
+    canvas.width = state.W;
+    canvas.height = state.H;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, state.W, state.H);
+    ctx.drawImage(state.base, 0, 0);
+    drawMark(ctx);
+    syncGpsNote();
+  }
+
+  /* ---------------- 記住上次設定 + 模板 ---------------- */
+  let persistTimer = null;
+  function schedulePersist(){
+    if(persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(function(){ lsSet(STORE.cfg, state.cfg); persistTimer = null; }, 250);
+  }
+
+  function applyCfgToUI(){
+    const c = state.cfg;
+    $("#caseName").value = c.caseName || "";
+    $("#place").value = c.place || "";
+    $("#item").value = c.item || "";
+    $("#scale").value = c.scale;
+    $("#opacity").value = c.opacity;
+    $("#cDate").checked = !!c.showDate;
+    $("#cTime").checked = !!c.showTime;
+    $("#cGps").checked = !!c.showGps;
+    $("#cSerial").checked = !!c.showSerial;
+    $("#cBarTop").checked = !!c.barTop;
+    $("#cUnit").checked = !!c.unitOn;
+    $("#unitFloor").value = String(c.unitFloor);
+    $("#unitBlock").value = c.unitBlock;
+    $("#unitFloor").disabled = !c.unitOn;
+    $("#unitBlock").disabled = !c.unitOn;
+    Array.prototype.forEach.call($("#modeSeg").querySelectorAll("button"), function(b){
+      b.classList.toggle("on", b.dataset.mode === c.mode);
+    });
+    $("#gridWrap").hidden = (c.mode === "tile");
+    $("#barTopWrap").hidden = (c.mode !== "bar");
+    markGrid();
+  }
+
+  function getPresets(){ const p = lsGet(STORE.presets, []); return Array.isArray(p) ? p : []; }
+
+  function renderPresets(){
+    const box = $("#presets");
+    const list = getPresets();
+    box.innerHTML = "";
+    list.forEach(function(p, i){
+      const b = document.createElement("button");
+      b.className = "chip" + (i === state.presetIdx ? " on" : "");
+      b.setAttribute("data-i", String(i));
+      b.textContent = p.name;
+      const x = document.createElement("i");
+      x.setAttribute("data-del", String(i));
+      x.textContent = "×";
+      x.title = "刪除這個模板";
+      b.appendChild(x);
+      box.appendChild(b);
+    });
+  }
+
+  function applyPreset(i){
+    const list = getPresets();
+    const p = list[i];
+    if(!p || !p.cfg) return;
+    state.cfg = Object.assign({}, DEFAULT_CFG, p.cfg);
+    state.presetIdx = i;
+    applyCfgToUI();
+    render();
+    renderPresets();
+  }
+
+  $("#presets").addEventListener("click", function(e){
+    const del = e.target.closest("[data-del]");
+    if(del){
+      e.stopPropagation();
+      const i = Number(del.getAttribute("data-del"));
+      const list = getPresets();
+      list.splice(i, 1);
+      lsSet(STORE.presets, list);
+      state.presetIdx = -1;
+      renderPresets();
+      return;
+    }
+    const chip = e.target.closest("[data-i]");
+    if(chip) applyPreset(Number(chip.getAttribute("data-i")));
+  });
+
+  $("#savePreset").addEventListener("click", function(){
+    $("#saveNameWrap").hidden = false;
+    const inp = $("#presetName");
+    const seed = (state.cfg.caseName || "").trim() || (state.cfg.item || "").trim();
+    inp.value = seed ? seed.slice(0, 16) : "";
+    inp.focus();
+  });
+  $("#presetCancel").addEventListener("click", function(){ $("#saveNameWrap").hidden = true; });
+  $("#presetOk").addEventListener("click", function(){
+    const inp = $("#presetName");
+    let name = (inp.value || "").trim();
+    if(!name) name = "模板 " + (getPresets().length + 1);
+    const list = getPresets();
+    const cfg = Object.assign({}, state.cfg);
+    const at = list.findIndex(function(p){ return p.name === name; });
+    if(at >= 0){ list[at] = { name: name, cfg: cfg }; state.presetIdx = at; }
+    else{ list.push({ name: name, cfg: cfg }); state.presetIdx = list.length - 1; }
+    if(!lsSet(STORE.presets, list)){
+      saveHint.className = "hint warn";
+      saveHint.textContent = "存不起來（瀏覽器不給存，可能是無痕模式）。";
+    }
+    $("#saveNameWrap").hidden = true;
+    renderPresets();
+  });
+
+  $("#resetCfg").addEventListener("click", function(){
+    state.cfg = Object.assign({}, DEFAULT_CFG);
+    state.presetIdx = -1;
+    applyCfgToUI();
+    render();
+    renderPresets();
+  });
+
+  $("#resetSerial").addEventListener("click", function(){
+    lsSet(STORE.serial, 0);
+    state.serialNo = 0;
+    state.serialAllocated = false;
+    render();
+    saveHint.className = "hint";
+    saveHint.textContent = "序號已歸零，這張照片會變成 0001。";
+  });
+
+  /* ---------------- 互動：設定 ---------------- */
+  ["caseName", "place", "item"].forEach(function(key){
+    $("#" + key).addEventListener("input", function(e){
+      state.cfg[key] = e.target.value;
+      render();
+    });
+  });
+
+  /* ---------------- 戶別（A–M 戶 × 2–15 樓） ---------------- */
+  (function unitPickers(){
+    const floor = $("#unitFloor"), block = $("#unitBlock");
+    for(let n = 2; n <= 15; n++){
+      const o = document.createElement("option");
+      o.value = String(n); o.textContent = n + " 樓";
+      floor.appendChild(o);
+    }
+    "ABCDEFGHIJKLM".split("").forEach(function(ch){
+      const o = document.createElement("option");
+      o.value = ch; o.textContent = ch + " 戶";
+      block.appendChild(o);
+    });
+    function sync(){
+      state.cfg.unitOn = $("#cUnit").checked;
+      state.cfg.unitFloor = Number(floor.value) || 2;
+      state.cfg.unitBlock = block.value || "A";
+      floor.disabled = !state.cfg.unitOn;
+      block.disabled = !state.cfg.unitOn;
+      render();
+    }
+    $("#cUnit").addEventListener("change", sync);
+    floor.addEventListener("change", sync);
+    block.addEventListener("change", sync);
+  })();
+
+  /* ---------------- 每個欄位自己的常用值清單 ---------------- */
+  const FIELD_KEYS = ["caseName", "place", "item"];
+
+  function getFieldStore(){
+    const v = lsGet(STORE.fields, {});
+    return (v && typeof v === "object") ? v : {};
+  }
+
+  function renderFieldChips(){
+    const store = getFieldStore();
+    FIELD_KEYS.forEach(function(key){
+      const box = $("#chips-" + key);
+      if(!box) return;
+      const list = Array.isArray(store[key]) ? store[key] : [];
+      box.innerHTML = "";
+      box.hidden = list.length === 0;
+      list.forEach(function(v){
+        const b = document.createElement("button");
+        b.className = "fchip";
+        b.setAttribute("data-key", key);
+        b.setAttribute("data-val", v);
+        b.textContent = v;
+        const x = document.createElement("i");
+        x.setAttribute("data-del", "1");
+        x.textContent = "×";
+        b.appendChild(x);
+        box.appendChild(b);
+      });
+    });
+  }
+
+  function saveFieldValue(key){
+    const el = $("#" + key);
+    const v = (el.value || "").trim();
+    if(!v) return;
+    const store = getFieldStore();
+    const list = Array.isArray(store[key]) ? store[key].slice() : [];
+    const at = list.indexOf(v);
+    if(at >= 0) list.splice(at, 1);
+    list.unshift(v);       // 最新的排最前面
+    store[key] = list.slice(0, 12);
+    lsSet(STORE.fields, store);
+    renderFieldChips();
+  }
+
+  $(".stack").addEventListener("click", function(e){
+    const sv = e.target.closest("[data-save]");
+    if(sv){ saveFieldValue(sv.getAttribute("data-save")); return; }
+
+    const chip = e.target.closest(".fchip[data-key]");
+    if(!chip) return;
+    const key = chip.getAttribute("data-key");
+    const val = chip.getAttribute("data-val");
+
+    if(e.target.hasAttribute("data-del")){
+      const store = getFieldStore();
+      const list = Array.isArray(store[key]) ? store[key].slice() : [];
+      const at = list.indexOf(val);
+      if(at >= 0) list.splice(at, 1);
+      store[key] = list;
+      lsSet(STORE.fields, store);
+      renderFieldChips();
+      return;
+    }
+
+    // 點了就把值填回去
+    $("#" + key).value = val;
+    state.cfg[key] = val;
+    render();
+  });
+
+  $("#modeSeg").addEventListener("click", function(e){
+    const b = e.target.closest("button[data-mode]");
+    if(!b) return;
+    state.cfg.mode = b.dataset.mode;
+    Array.prototype.forEach.call(this.querySelectorAll("button"), function(x){ x.classList.toggle("on", x === b); });
+    $("#gridWrap").hidden = (state.cfg.mode === "tile");
+    $("#barTopWrap").hidden = (state.cfg.mode !== "bar");
+    render();
+  });
+
+  $("#grid9").addEventListener("click", function(e){
+    const b = e.target.closest("button[data-pos]");
+    if(!b) return;
+    const i = Number(b.dataset.pos);
+    state.cfg.pos = i;
+    if(state.cfg.mode === "bar"){
+      state.cfg.barTop = (i <= 2);
+      $("#cBarTop").checked = state.cfg.barTop;
+    }else{
+      const col = i % 3, row = Math.floor(i / 3);
+      state.cfg.px = [0.04, 0.34, 0.96][col];
+      state.cfg.py = [0.04, 0.45, 0.82][row];
+      // 右/中欄改用對齊換算，交由 drawMark clamp 即可
+      if(col === 2) state.cfg.px = 0.96;
+      if(col === 1) state.cfg.px = 0.30;
+    }
+    markGrid();
+    render();
+  });
+  function markGrid(){
+    Array.prototype.forEach.call($("#grid9").querySelectorAll("button"), function(x){
+      x.classList.toggle("on", Number(x.dataset.pos) === state.cfg.pos);
+    });
+  }
+
+  $("#scale").addEventListener("input", function(e){ state.cfg.scale = Number(e.target.value); render(); });
+  $("#opacity").addEventListener("input", function(e){ state.cfg.opacity = Number(e.target.value); render(); });
+  $("#cDate").addEventListener("change", function(e){ state.cfg.showDate = e.target.checked; render(); });
+  $("#cTime").addEventListener("change", function(e){ state.cfg.showTime = e.target.checked; render(); });
+  $("#cGps").addEventListener("change", function(e){ state.cfg.showGps = e.target.checked; render(); });
+  $("#cBarTop").addEventListener("change", function(e){ state.cfg.barTop = e.target.checked; render(); });
+  $("#cSerial").addEventListener("change", function(e){
+    state.cfg.showSerial = e.target.checked;
+    render();   // 配號交給 lines() → ensureSerial()
+  });
+
+  /* ---------------- 互動：拖曳 ---------------- */
+  let dragging = false;
+  function toNorm(ev){
+    const r = canvas.getBoundingClientRect();
+    return {
+      x: Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width)),
+      y: Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height))
+    };
+  }
+  canvas.addEventListener("pointerdown", function(ev){
+    if(state.cfg.mode === "tile") return;
+    if(state.cfg.mode === "bar"){
+      const p = toNorm(ev);
+      state.cfg.barTop = p.y < 0.5;
+      $("#cBarTop").checked = state.cfg.barTop;
+      render(); return;
+    }
+    dragging = true;
+    canvas.setPointerCapture(ev.pointerId);
+    canvas.style.cursor = "grabbing";
+    const p = toNorm(ev);
+    state.cfg.px = p.x; state.cfg.py = p.y;
+    state.cfg.pos = -1; markGrid();
+    render();
+  });
+  canvas.addEventListener("pointermove", function(ev){
+    if(!dragging) return;
+    const p = toNorm(ev);
+    state.cfg.px = Math.min(0.94, p.x);
+    state.cfg.py = Math.min(0.94, p.y);
+    render();
+  });
+  canvas.addEventListener("pointerup", function(){
+    dragging = false; canvas.style.cursor = "grab";
+  });
+
+  /* ---------------- 存檔 ---------------- */
+  function stamp(when){
+    const t = when || state.time;
+    return t.getFullYear() + pad2(t.getMonth() + 1) + pad2(t.getDate())
+      + "-" + pad2(t.getHours()) + pad2(t.getMinutes()) + pad2(t.getSeconds());
+  }
+
+  // 存一個 blob：能用分享面板就走分享（手機進相簿），否則退回下載
+  async function saveBlob(blob, name, opts){
+    const allowShare = !opts || opts.share !== false;
+    if(allowShare){
+      try{
+        const f = new File([blob], name, { type: "image/jpeg" });
+        if(navigator.canShare && navigator.canShare({ files: [f] })){
+          await navigator.share({ files: [f], title: "浮水印照片" });
+          return "shared";
+        }
+      }catch(err){
+        if(err && err.name === "AbortError") return "cancel";
+      }
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = name; a.rel = "noopener";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 6000);
+    return "downloaded";
+  }
+
+  $("#save").addEventListener("click", async function(){
+    if(!state.base) return;
+    saveHint.className = "hint";
+    saveHint.textContent = "產生中…";
+    let blob = null;
+    try{
+      blob = await new Promise(function(res){ canvas.toBlob(res, "image/jpeg", 0.92); });
+    }catch(e){}
+    if(!blob){ saveHint.className = "hint warn"; saveHint.textContent = "產生失敗，換一張試試。"; return; }
+
+    const name = "watermark-" + stamp() + ".jpg";
+    const how = await saveBlob(blob, name);
+    saveHint.className = how === "downloaded" ? "hint" : "hint ok";
+    if(how === "shared") saveHint.textContent = "已開啟分享面板〔選「儲存影像」就會進相簿〕。";
+    else if(how === "downloaded") saveHint.textContent = "已下載 " + name + "。若手機沒跳出下載，請用上方「儲存 / 分享」。";
+    else saveHint.textContent = "";
+  });
+
+  /* ---------------- 批次 ---------------- */
+  const batchItems = [];
+
+  async function runBatch(files){
+    if(!files || !files.length) return;
+    const batchView = $("#batchView"), batchGrid = $("#batchGrid");
+    const batchStatus = $("#batchStatus"), batchAll = $("#batchAll"), batchHint = $("#batchHint");
+
+    shotView.hidden = true;
+    editView.hidden = true;
+    batchView.hidden = false;
+    batchGrid.innerHTML = "";
+    batchHint.textContent = "";
+    batchAll.disabled = true;
+    for(let i = 0; i < batchItems.length; i++) URL.revokeObjectURL(batchItems[i].url);
+    batchItems.length = 0;
+    window.scrollTo({ top: 0, behavior: "smooth" });
+
+    const gps = state.gps || null;
+    let ok = 0, fail = 0;
+
+    for(let i = 0; i < files.length; i++){
+      batchStatus.textContent = "處理中 " + (i + 1) + " / " + files.length + "…";
+      await new Promise(function(r){ setTimeout(r, 0); });   // 讓畫面有機會更新
+      try{
+        const s = await loadImageSource(files[i]);
+        const base = baseCanvasFrom(s.src, s.w, s.h);
+        const when = fileTime(files[i]);
+        const serial = state.cfg.showSerial ? allocSerial() : 0;
+        const out = composeOne(base, when, gps, serial);
+        const blob = await new Promise(function(res){ out.toBlob(res, "image/jpeg", 0.92); });
+        if(!blob) throw new Error("toBlob");
+
+        const name = "watermark-" + stamp(when)
+          + (serial ? "-" + String(serial).padStart(4, "0") : "") + ".jpg";
+        batchItems.push({ blob: blob, url: URL.createObjectURL(blob), name: name });
+
+        const b = document.createElement("button");
+        b.className = "bitem";
+        b.setAttribute("data-i", String(batchItems.length - 1));
+        const img = document.createElement("img");
+        img.alt = "";
+        img.src = makeThumb(out, 260);
+        const cap = document.createElement("b");
+        cap.textContent = serial ? "NO. " + String(serial).padStart(4, "0") : (i + 1) + " / " + files.length;
+        b.appendChild(img); b.appendChild(cap);
+        batchGrid.appendChild(b);
+        ok++;
+      }catch(err){
+        fail++;
+        const d = document.createElement("div");
+        d.className = "bitem failed";
+        d.textContent = "第 " + (i + 1) + " 張失敗";
+        batchGrid.appendChild(d);
+      }
+    }
+
+    batchStatus.textContent = "完成 " + ok + " 張" + (fail ? "，失敗 " + fail + " 張" : "");
+    batchAll.disabled = ok === 0;
+    batchHint.className = "hint";
+    batchHint.textContent = ok
+      ? "點縮圖可以單張儲存／分享（iPhone 一次只能存一張）；電腦或 Android 可按「全部下載」。時間用檔案的修改時間。"
+      : "都沒有成功，換幾張圖試試。";
+  }
+
+  $("#files").addEventListener("change", function(e){
+    const files = e.target.files ? Array.prototype.slice.call(e.target.files) : [];
+    e.target.value = "";
+    if(files.length) runBatch(files);
+  });
+
+  $("#batchGrid").addEventListener("click", async function(e){
+    const b = e.target.closest(".bitem[data-i]");
+    if(!b) return;
+    const it = batchItems[Number(b.getAttribute("data-i"))];
+    if(!it) return;
+    const hint = $("#batchHint");
+    hint.className = "hint";
+    hint.textContent = "準備中…";
+    const how = await saveBlob(it.blob, it.name);
+    hint.className = how === "downloaded" ? "hint" : "hint ok";
+    hint.textContent = how === "shared" ? "已開分享面板〔選「儲存影像」〕。"
+      : how === "downloaded" ? "已下載 " + it.name : "";
+  });
+
+  $("#batchAll").addEventListener("click", async function(){
+    if(!batchItems.length) return;
+    const hint = $("#batchHint");
+    hint.className = "hint";
+    hint.textContent = "下載中…若瀏覽器擋掉多檔下載，請改點縮圖一張一張存。";
+    for(let i = 0; i < batchItems.length; i++){
+      const how = await saveBlob(batchItems[i].blob, batchItems[i].name, { share: false });
+      if(how === "cancel") break;
+      await new Promise(function(r){ setTimeout(r, 320); });
+    }
+    hint.className = "hint ok";
+    hint.textContent = "已送出 " + batchItems.length + " 張下載。";
+  });
+
+  $("#batchBack").addEventListener("click", function(){
+    for(let i = 0; i < batchItems.length; i++) URL.revokeObjectURL(batchItems[i].url);
+    batchItems.length = 0;
+    $("#batchGrid").innerHTML = "";
+    $("#batchView").hidden = true;
+    shotView.hidden = false;
+    if(!state.stream) startCam(); else video.play().catch(function(){});
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+
+  $("#retake").addEventListener("click", function(){
+    editView.hidden = true;
+    shotView.hidden = false;
+    state.base = null;
+    if(!state.stream) startCam(); else video.play().catch(function(){});
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+
+  /* ---------------- 啟動 ---------------- */
+  shutter.addEventListener("click", capture);
+  fileInput.addEventListener("change", function(e){
+    const f = e.target.files && e.target.files[0];
+    if(f) fromFile(f);
+    e.target.value = "";
+  });
+  flip.addEventListener("click", function(){
+    state.facing = (state.facing === "environment") ? "user" : "environment";
+    startCam();
+  });
+
+  $("#orientSeg").addEventListener("click", function(e){
+    const b = e.target.closest("button[data-orient]");
+    if(b) setOrient(b.dataset.orient, true);
+  });
+
+  $("#cCropUpload").addEventListener("change", function(e){
+    state.cropUpload = e.target.checked;
+    lsSet(CROP_STORE, state.cropUpload);
+  });
+
+  /* ---------------- 測試模式：?demo=1[&wm=tile|corner|bar] ---------------- */
+  function demoImage(){
+    const c = document.createElement("canvas");
+    c.width = 1600; c.height = 1200;
+    const g = c.getContext("2d");
+    const sky = g.createLinearGradient(0, 0, 0, 1200);
+    sky.addColorStop(0, "#1d3b5c"); sky.addColorStop(.55, "#3f6d8c"); sky.addColorStop(1, "#c98f5a");
+    g.fillStyle = sky; g.fillRect(0, 0, 1600, 1200);
+    g.fillStyle = "rgba(255,240,210,.85)";
+    g.beginPath(); g.arc(1180, 300, 90, 0, Math.PI * 2); g.fill();
+    g.fillStyle = "#22303c";
+    g.beginPath(); g.moveTo(0, 1200); g.lineTo(0, 850); g.lineTo(420, 640); g.lineTo(780, 880);
+    g.lineTo(1120, 700); g.lineTo(1600, 940); g.lineTo(1600, 1200); g.closePath(); g.fill();
+    g.fillStyle = "rgba(0,0,0,.22)";
+    for(let i = 0; i < 26; i++){
+      g.fillRect(80 + i * 58, 1010 - (i % 5) * 26, 34, 200 + (i % 3) * 40);
+    }
+    return c;
+  }
+  function demoStart(){
+    const q = new URLSearchParams(location.search);
+    const wm = q.get("wm");
+    if(wm === "tile" || wm === "corner" || wm === "bar"){
+      state.cfg.mode = wm;
+      Array.prototype.forEach.call($("#modeSeg").querySelectorAll("button"), function(b){
+        b.classList.toggle("on", b.dataset.mode === wm);
+      });
+      $("#gridWrap").hidden = (wm === "tile");
+      $("#barTopWrap").hidden = (wm !== "bar");
+    }
+    state.cfg.caseName = "測試案場 A 棟";
+    state.cfg.place = "3F 東側";
+    state.cfg.item = "灌漿完成";
+    useImage(demoImage());
+  }
+
+  /* ---------------- 關掉瀏覽器手勢 ---------------- */
+  // 雙擊縮放、兩指縮放、長按選單/選字、下拉重整、左右滑返回、邊緣回彈
+  function switchOffBrowserGestures(){
+    ["gesturestart", "gesturechange", "gestureend"].forEach(function(t){
+      document.addEventListener(t, function(e){ e.preventDefault(); }, { passive: false });
+    });
+    document.addEventListener("touchmove", function(e){
+      if(e.touches && e.touches.length > 1) e.preventDefault();
+    }, { passive: false });
+    // 註：雙擊縮放交給 CSS 的 touch-action:manipulation 處理。
+    // 不要用 touchend 自己攔（passive:false + preventDefault 會把 320ms 內的
+    // 第二次真點擊一起吃掉，例如連按「拍照」或快速開關選項）。
+    document.addEventListener("contextmenu", function(e){
+      const t = e.target && e.target.tagName;
+      if(t !== "INPUT" && t !== "TEXTAREA") e.preventDefault();
+    });
+    try{
+      if(!history.state || !history.state.hw) history.replaceState({ hw: 1 }, "");
+      window.addEventListener("popstate", function(){
+        if(!history.state || !history.state.hw) history.pushState({ hw: 1 }, "");
+      });
+    }catch(e){}
+  }
+
+  /* ---------------- PWA：安裝 / 離線 / 更新 ---------------- */
+  (function pwa(){
+    const isStandalone = (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)
+      || window.navigator.standalone === true;
+
+    // iOS 沒有 beforeinstallprompt，只能給文字指示
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+      || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    const hint = $("#iosHint");
+    if(isIOS && !isStandalone && hint) hint.hidden = false;
+
+    let deferred = null;
+    window.addEventListener("beforeinstallprompt", function(e){
+      e.preventDefault();
+      deferred = e;
+      $("#installBar").hidden = false;
+    });
+    $("#installBtn").addEventListener("click", async function(){
+      if(!deferred) return;
+      deferred.prompt();
+      try{ await deferred.userChoice; }catch(e){}
+      deferred = null;
+      $("#installBar").hidden = true;
+    });
+    window.addEventListener("appinstalled", function(){
+      $("#installBar").hidden = true;
+      $("#footNote").textContent = "已安裝 · 可離線使用";
+    });
+    if(isStandalone) $("#footNote").textContent = "已加到主畫面 · 可離線使用";
+
+    if(!("serviceWorker" in navigator)) return;
+    // SW 只存在安全來源（https / localhost）；http://區網 IP 不行，跳過就好
+    const secure = location.protocol === "https:"
+      || /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+    if(!secure) return;
+
+    navigator.serviceWorker.register("./sw.js").then(function(reg){
+      const toast = $("#updateToast");
+      const showToast = function(){ if(toast) toast.hidden = false; };
+      if(reg.waiting && navigator.serviceWorker.controller) showToast();
+      reg.addEventListener("updatefound", function(){
+        const sw = reg.installing;
+        if(!sw) return;
+        sw.addEventListener("statechange", function(){
+          // 第一次安裝不算「新版本」，只有已經有 controller 才提示
+          if(sw.state === "installed" && navigator.serviceWorker.controller) showToast();
+        });
+      });
+    }).catch(function(){ /* 沒 SW 也照樣能用，只是不能離線 */ });
+
+    $("#updateReload").addEventListener("click", function(){ location.reload(); });
+  })();
+
+  switchOffBrowserGestures();
+  setOrient(lsGet(ORIENT_STORE, "auto"), false);
+  state.cropUpload = lsGet(CROP_STORE, false) === true;
+  $("#cCropUpload").checked = state.cropUpload;
+  syncCropToggle();
+  state.serialNo = Number(lsGet(STORE.serial, 0) || 0);
+  applyCfgToUI();
+  renderPresets();
+  renderFieldChips();
+  markGrid();
+  if(new URLSearchParams(location.search).has("debug")){
+    setTimeout(function(){
+      var bad = [];
+      Array.prototype.forEach.call(document.querySelectorAll("*"), function(el){
+        var r = el.getBoundingClientRect();
+        if(r.right > innerWidth + 0.5 || r.width > innerWidth + 0.5){
+          var id = el.id ? ("#" + el.id) : "";
+          var cls = (typeof el.className === "string" && el.className) ? ("." + el.className.split(" ")[0]) : "";
+          bad.push(el.tagName + id + cls + " w=" + Math.round(r.width) + " right=" + Math.round(r.right));
+        }
+      });
+      var pre = document.createElement("pre");
+      pre.id = "dbg";
+      pre.textContent = "innerWidth=" + innerWidth + " dpr=" + devicePixelRatio
+        + " scrollW=" + document.documentElement.scrollWidth
+        + " bodyW=" + document.body.clientWidth + "\n" + bad.join("\n");
+      document.body.appendChild(pre);
+    }, 400);
+  }
+  if(new URLSearchParams(location.search).has("demo")){
+    demoStart();
+  }else if(!secure){
+    camBadge.textContent = "需要 HTTPS";
+    camHint.className = "hint warn";
+    camHint.textContent = "這個網址不是 HTTPS，瀏覽器不會給相機權限。先按「選照片」，或改用 https:// 開這個頁面。";
+    showFallback("需要 HTTPS", "瀏覽器只在 HTTPS（或 localhost）下提供相機。先用下面的「選照片」。", true);
+  }else{
+    startCam();
+  }
+})();
+</script>
+</body>
+</html>
