@@ -46,12 +46,12 @@
   }
   /* 拍照預覽：高度固定，寬度由拍照比例（直/橫/自動）決定，
      所以「看到的框」就是「拍出來的框」 */
+  /* 拍照預覽：寬高由 JS 依「拍照比例」算出來（不用 max-width 夾，
+     不然在窄螢幕上高度不動、寬度被夾 → 比例跑掉 → 看到的跟拍到的不一樣）*/
   #shotView .stage{
-    height:var(--shot-h, clamp(168px, 30vh, 300px));
-    aspect-ratio:var(--shot-ar, 4 / 3);
-    width:auto; max-width:100%; margin:0 auto;
+    margin:0 auto; touch-action:none;
   }
-  @media (min-width:600px){ #shotView .stage{max-height:none} }
+  #shotView .stage video{will-change:transform}
   .stage.tight{
     aspect-ratio:auto; height:auto; max-width:none; max-height:none; background:transparent;
     border:0; box-shadow:none; overflow:visible;
@@ -64,6 +64,12 @@
   }
   .stage.tight canvas{touch-action:none; cursor:grab}
   .seg.compact button{font-size:12.5px; padding:7px 4px}
+
+  /* 取景（縮放 / 拖曳） */
+  .zoomrow{display:flex; align-items:center; gap:10px; margin:10px 0 0}
+  .zoomrow > span{font-size:12.5px; color:var(--dim); flex:0 0 auto}
+  .zoomrow input[type=range]{flex:1 1 auto; margin:0}
+  .zoomrow b{font-size:12.5px; font-weight:600; color:#dfe7ee; flex:0 0 44px; text-align:right}
 
   /* 批次 */
   .batchbar{display:flex; align-items:center; gap:10px; margin:2px 0 10px}
@@ -272,6 +278,12 @@
         <button data-orient="landscape">橫式</button>
       </div>
     </div>
+    <div class="zoomrow">
+      <span>取景</span>
+      <input id="zoom" type="range" min="1" max="4" step="0.1" value="1" aria-label="縮放">
+      <b id="zoomVal">1.0×</b>
+      <button id="zoomReset" class="savebtn" title="回到中央 1 倍">重置</button>
+    </div>
     <label class="sw" id="cropWrap" style="margin:10px 2px 0">
       <input type="checkbox" id="cCropUpload">
       <span>選照片時也裁成這個方向</span>
@@ -451,6 +463,8 @@
     facing: "environment",
     orient: "auto",              // auto | portrait | landscape
     cropUpload: false,           // 上傳照片也裁成所選方向
+    zoom: 1,                     // 取景縮放 1–4
+    zx: 0.5, zy: 0.5,            // 取景中心（0..1，相對拍照框）
     serialNo: 0,
     serialAllocated: false,   // 這張照片已經配過號了嗎（避免拖浮水印時重複配/重複跳號）
     presetIdx: -1,
@@ -490,8 +504,8 @@
       shutter.disabled = false;
       camFallback.hidden = true;
       camBadge.textContent = "相機就緒";
-      updateStageAspect();
-      video.addEventListener("loadedmetadata", updateStageAspect, { once: true });
+      layoutStage();
+      video.addEventListener("loadedmetadata", layoutStage, { once: true });
       camHint.className = "hint";
       camHint.textContent = "畫面比例以「拍照」後的結果為準。";
       const t = stream.getVideoTracks()[0];
@@ -532,28 +546,64 @@
     Array.prototype.forEach.call($("#orientSeg").querySelectorAll("button"), function(b){
       b.classList.toggle("on", b.dataset.orient === mode);
     });
-    updateStageAspect();
+    layoutStage();
   }
 
   // 預覽框的比例：自動 → 跟鏡頭實際比例；直/橫 → 固定 3:4 / 4:3
-  // 直式（含自動但鏡頭是直式時）給比較多高度，不然寬度只剩不到 200px
-  function updateStageAspect(){
-    const stage = shotView.querySelector(".stage");
+  function currentAspect(){
     const r = ORIENT_RATIO[state.orient];
-    let w, h;
-    if(r){ w = r.w; h = r.h; }
-    else{
-      const vw = video.videoWidth, vh = video.videoHeight;
-      if(vw && vh){ w = vw; h = vh; } else { w = 4; h = 3; }
-    }
-    stage.style.setProperty("--shot-ar", w + " / " + h);
-    stage.style.setProperty("--shot-h", (w / h) < 1
-      ? "clamp(210px, 40vh, 400px)"     // 直式
-      : "clamp(168px, 30vh, 300px)");   // 橫式 / 自動橫式
+    if(r) return r;
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if(vw && vh) return { w: vw, h: vh };
+    return { w: 4, h: 3 };
+  }
+
+  // 框的寬高由比例算出來 → 框的比例永遠等於拍照比例（不會被 max-width 夾壞）
+  function layoutStage(){
+    const stage = shotView.querySelector(".stage");
+    const a = currentAspect();
+    const ratio = a.w / a.h;
+    const availW = Math.min(shotView.clientWidth || 360, 420);
+    const maxH = window.innerHeight * (ratio < 1 ? 0.40 : 0.30);
+    let bw = Math.min(availW, maxH * ratio);
+    let bh = bw / ratio;
+    bw = Math.max(120, Math.round(bw));
+    bh = Math.max(90, Math.round(bh));
+    stage.style.width = bw + "px";
+    stage.style.height = bh + "px";
+    applyPreviewTransform();
     syncCropToggle();
   }
 
-  // 「選照片時也裁」只在意義上有效（自動模式沒比例可裁）→ 灰掉
+  function panLimit(z){ return z <= 1.001 ? 0.5 : 1 / (2 * z); }
+
+  function clampPan(){
+    const m = panLimit(state.zoom);
+    if(state.zoom <= 1.001){ state.zx = 0.5; state.zy = 0.5; return; }
+    state.zx = Math.min(1 - m, Math.max(m, state.zx));
+    state.zy = Math.min(1 - m, Math.max(m, state.zy));
+  }
+
+  // 預覽用 transform 模擬同樣的裁切：1 倍時完全置中，放大時以取景點為中心
+  function applyPreviewTransform(){
+    const stage = shotView.querySelector(".stage");
+    const W = stage.clientWidth, H = stage.clientHeight;
+    const z = state.zoom;
+    if(!W || !H) return;
+    const tx = z * W * (0.5 - state.zx);
+    const ty = z * H * (0.5 - state.zy);
+    video.style.transformOrigin = "center center";
+    video.style.transform = "translate(" + tx.toFixed(2) + "px, " + ty.toFixed(2) + "px) scale(" + z + ")";
+  }
+
+  function setZoom(z){
+    state.zoom = Math.min(4, Math.max(1, Math.round(z * 10) / 10));
+    clampPan();
+    $("#zoom").value = String(state.zoom);
+    $("#zoomVal").textContent = state.zoom.toFixed(1) + "×";
+    applyPreviewTransform();
+  }
+
   function syncCropToggle(){
     const box = $("#cCropUpload");
     const wrap = $("#cropWrap");
@@ -564,23 +614,32 @@
   }
 
   // 從 video 影格取像；選了直/橫就置中裁切到那個比例（跟預覽一致）
+  // 從 video 影格取像：先依方向算「滿版取景框」→ 再依縮放/拖曳從中裁一塊（跟預覽一致）
   function capture(){
     const vw = video.videoWidth, vh = video.videoHeight;
     if(!vw || !vh){ camHint.textContent = "相機還沒準備好，等一下再按。"; return; }
 
-    const r = ORIENT_RATIO[state.orient];
-    let sx = 0, sy = 0, sw = vw, sh = vh;
-    if(r){
-      const want = r.w / r.h, have = vw / vh;
-      if(have > want){ sw = Math.round(vh * want); sh = vh; }        // 影格比較寬 → 裁左右
-      else{ sw = vw; sh = Math.round(vw / want); }                   // 影格比較高 → 裁上下
-      sx = Math.round((vw - sw) / 2);
-      sy = Math.round((vh - sh) / 2);
-    }
+    const a = currentAspect();
+    const want = a.w / a.h, have = vw / vh;
+    // 滿版取景框（置中）
+    let sw0 = vw, sh0 = vh;
+    if(have > want) sw0 = Math.round(vh * want);   // 影格比較寬 → 裁左右
+    else sh0 = Math.round(vw / want);              // 影格比較高 → 裁上下
+    const bx = Math.round((vw - sw0) / 2);
+    const by = Math.round((vh - sh0) / 2);
+
+    // 縮放 + 取景中心
+    const z = state.zoom || 1;
+    const cw = Math.max(1, Math.round(sw0 / z));
+    const ch = Math.max(1, Math.round(sh0 / z));
+    let sx = Math.round(bx + state.zx * sw0 - cw / 2);
+    let sy = Math.round(by + state.zy * sh0 - ch / 2);
+    sx = Math.min(Math.max(bx, sx), bx + sw0 - cw);
+    sy = Math.min(Math.max(by, sy), by + sh0 - ch);
 
     const c = document.createElement("canvas");
-    c.width = sw; c.height = sh;
-    c.getContext("2d").drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+    c.width = cw; c.height = ch;
+    c.getContext("2d").drawImage(video, sx, sy, cw, ch, 0, 0, cw, ch);
     useImage(c);
   }
 
@@ -1360,6 +1419,54 @@
     lsSet(CROP_STORE, state.cropUpload);
   });
 
+  /* ---------------- 取景：縮放 + 拖曳 + 雙指 ---------------- */
+  $("#zoom").addEventListener("input", function(e){ setZoom(Number(e.target.value)); });
+  $("#zoomReset").addEventListener("click", function(){
+    state.zx = 0.5; state.zy = 0.5;
+    setZoom(1);
+  });
+
+  (function stageGestures(){
+    const stage = shotView.querySelector(".stage");
+    let drag = null;
+    let pinch = null;
+
+    function dist(t){ return Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY); }
+
+    stage.addEventListener("pointerdown", function(e){
+      if(e.pointerType === "touch" && e.isPrimary === false) return;
+      if(state.zoom <= 1.001) return;      // 沒放大就不用拖
+      drag = { x: e.clientX, y: e.clientY, zx: state.zx, zy: state.zy };
+      try{ stage.setPointerCapture(e.pointerId); }catch(err){}
+    });
+    stage.addEventListener("pointermove", function(e){
+      if(!drag) return;
+      const W = stage.clientWidth || 1, H = stage.clientHeight || 1, z = state.zoom;
+      state.zx = drag.zx - (e.clientX - drag.x) / (z * W);
+      state.zy = drag.zy - (e.clientY - drag.y) / (z * H);
+      clampPan();
+      applyPreviewTransform();
+    });
+    stage.addEventListener("pointerup", function(){ drag = null; });
+    stage.addEventListener("pointercancel", function(){ drag = null; });
+
+    stage.addEventListener("touchstart", function(e){
+      if(e.touches.length === 2) pinch = { d: dist(e.touches), z: state.zoom };
+    }, { passive: true });
+    stage.addEventListener("touchmove", function(e){
+      if(!pinch || e.touches.length !== 2) return;
+      e.preventDefault();
+      const z = pinch.z * (dist(e.touches) / (pinch.d || 1));
+      setZoom(z);
+    }, { passive: false });
+    stage.addEventListener("touchend", function(e){
+      if(e.touches.length < 2) pinch = null;
+    }, { passive: true });
+  })();
+
+  window.addEventListener("resize", layoutStage);
+  window.addEventListener("orientationchange", function(){ setTimeout(layoutStage, 250); });
+
   /* ---------------- 測試模式：?demo=1[&wm=tile|corner|bar] ---------------- */
   function demoImage(){
     const c = document.createElement("canvas");
@@ -1475,6 +1582,7 @@
 
   switchOffBrowserGestures();
   setOrient(lsGet(ORIENT_STORE, "auto"), false);
+  $("#zoomVal").textContent = "1.0×";
   state.cropUpload = lsGet(CROP_STORE, false) === true;
   $("#cCropUpload").checked = state.cropUpload;
   syncCropToggle();
