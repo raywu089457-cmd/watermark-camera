@@ -5,3 +5,6 @@ _dev/
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# 常駐房間的本機設定（每台機器不同）
+.pi/
